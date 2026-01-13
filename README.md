@@ -22,8 +22,35 @@ uv pip install -e .
 
 ## Usage
 ### CLI
+The CLI tool automatically calculates the best GPU setup and can deploy it directly to Runpod.
+
+**Basic usage:**
 ```bash
 runpod-serve --model Qwen/Qwen3-Omni-30B-A3B-Instruct --quant int4 --users 10
+```
+
+**Deploy with automatic termination on exit:**
+This is useful if you want to ensure the pod is deleted when you stop the script (e.g., with Ctrl+C or closing the terminal).
+```bash
+runpod-serve --model Qwen/Qwen3-Omni-30B-A3B-Instruct --users 5 --terminate-on-exit
+```
+
+**Full options:**
+```bash
+runpod-serve \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --quant int4 \
+  --kv-quant fp8 \
+  --users 20 \
+  --max-length 4096 \
+  --util 0.9 \
+  --pod-name "my-llm-pod" \
+  --terminate-on-exit
+```
+
+**Dry run (calculate only, no deployment):**
+```bash
+runpod-serve --model meta-llama/Llama-3.1-70B-Instruct --users 1 --dry-run
 ```
 
 ### Python API

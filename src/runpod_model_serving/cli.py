@@ -40,6 +40,8 @@ def main():
     atexit.register(cleanup)
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    if hasattr(signal, 'SIGHUP'):
+        signal.signal(signal.SIGHUP, signal_handler)
 
     print(f"Fetching model info for {args.model}...")
     params = get_model_params(args.model)
