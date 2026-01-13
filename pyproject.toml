@@ -1,0 +1,18 @@
+[project]
+name = "runpod-model-serving"
+version = "0.1.0"
+description = "LLM VRAM Calculator and Runpod Deployment Tool"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "runpod>=1.8.1",
+    "huggingface-hub>=0.20.0",
+    "requests>=2.31.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+runpod-serve = "runpod_model_serving.cli:main"
