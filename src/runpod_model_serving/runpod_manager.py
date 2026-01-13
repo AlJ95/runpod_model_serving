@@ -45,16 +45,20 @@ class RunpodManager:
                             
         return best_setup
 
-    def deploy_template(self, gpu_name, template_id, gpu_count=1, pod_name="llm-serving-pod"):
+    def deploy_pod(self, gpu_name, model_id, template_id=None, gpu_count=1, pod_name="llm-serving-pod", max_model_len=8192, gpu_util=0.9, model_size_gb=20):
         """
-        Deploys a pod using an existing template.
+        Deploys a pod using an existing template or the official vLLM image.
         """
+        # Ensure pod_name is lowercase and not None
+        pod_name = (pod_name or "llm-serving-pod").lower()
+
         # Mapping common names to Runpod IDs (simplified)
         gpu_id_map = {
             "NVIDIA RTX 3090": "NVIDIA GeForce RTX 3090",
             "NVIDIA RTX 4090": "NVIDIA GeForce RTX 4090",
             "NVIDIA A100 80G": "NVIDIA A100 80GB PCIe",
             "NVIDIA H100 80G": "NVIDIA H100 80GB PCIe",
+            "NVIDIA A40": "NVIDIA A40",
         }
         
         # Clean up name for matching
@@ -69,13 +73,26 @@ class RunpodManager:
             target_gpu_id = gpu_name # Fallback
             
         try:
-            pod = runpod.create_pod(
-                name=pod_name,
-                image_name=None, # Template handles this
-                gpu_type_id=target_gpu_id,
-                template_id=template_id,
-                gpu_count=gpu_count
-            )
+            if template_id:
+                pod = runpod.create_pod(
+                    name=pod_name,
+                    gpu_type_id=target_gpu_id,
+                    template_id=template_id,
+                    gpu_count=gpu_count
+                )
+            else:
+                # Calculate disk size: model size + 20GB buffer for OS/vLLM
+                disk_size = int(model_size_gb + 20)
+                # Use official vLLM image
+                pod = runpod.create_pod(
+                    name=pod_name,
+                    image_name="vllm/vllm-openai:latest",
+                    gpu_type_id=target_gpu_id,
+                    gpu_count=gpu_count,
+                    docker_args=f"--model {model_id} --gpu-memory-utilization {gpu_util} --max-model-len {max_model_len}",
+                    ports="8000/http",
+                    container_disk_in_gb=disk_size
+                )
             return pod
         except Exception as e:
             print(f"Error creating pod: {e}")
@@ -84,14 +101,20 @@ class RunpodManager:
     def get_connection_details(self, pod_id):
         try:
             pod = runpod.get_pod(pod_id)
-            if pod and pod.get('runtime'):
-                return {
-                    "id": pod['id'],
-                    "status": pod['runtime'].get('status'),
-                    "ip": pod['runtime'].get('address'),
-                    "ports": pod['runtime'].get('ports')
-                }
-            return pod
+            if not pod:
+                return None
+            
+            details = {
+                "id": pod['id'],
+                "name": pod.get('name'),
+                "status": "UNKNOWN",
+                "url": f"https://{pod['id']}-8000.proxy.runpod.net/"
+            }
+
+            if pod.get('runtime'):
+                details["status"] = pod['runtime'].get('status')
+            
+            return details
         except Exception as e:
             print(f"Error getting pod details: {e}")
             return None

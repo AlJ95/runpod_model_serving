@@ -1,5 +1,7 @@
 import sys
 import argparse
+import time
+import requests
 from .hf_loader import get_model_params
 from .runpod_manager import RunpodManager
 from .calculator import calculate_performance
@@ -13,7 +15,9 @@ def main():
     parser.add_argument("--kv-quant", type=str, default="fp8", choices=["fp16", "fp8", "int8", "int4"])
     parser.add_argument("--max-length", type=int, default=8192)
     parser.add_argument("--users", type=int, default=1)
-    parser.add_argument("--util", type=float, default=0.9, help="GPU Memory Utilization (vLLM default 0.9)")
+    parser.add_argument("--util", type=float, default=0.95, help="GPU Memory Utilization (vLLM default 0.9)")
+    parser.add_argument("--dry-run", action="store_true", help="Calculate only, do not deploy")
+    parser.add_argument("--pod-name", type=str, help="Custom name for the pod")
     
     args = parser.parse_args()
     
@@ -61,18 +65,63 @@ def main():
     print(f"  - Gen Speed:     {res['gen_speed']:.0f} tok/s")
     print(f"  - Per User Gen:  {res['shared_gen']:.1f} tok/s")
     
-    if args.template:
-        print(f"\nDeploying to Runpod using template {args.template}...")
-        pod = manager.deploy_template(gpu['name'], args.template, gpu_count=count)
-        if pod:
-            print(f"Pod created successfully! ID: {pod['id']}")
-            print("Waiting for connection details...")
+    if args.dry_run:
+        print("\nDry run enabled. Skipping deployment.")
+        return
+
+    print(f"\nDeploying to Runpod...")
+    pod = manager.deploy_pod(
+        gpu_name=gpu['name'], 
+        model_id=args.model,
+        template_id=args.template, 
+        gpu_count=count,
+        pod_name=args.pod_name,
+        max_model_len=args.max_length,
+        gpu_util=args.util,
+        model_size_gb=res['model_vram']
+    )
+    
+    if pod:
+        print(f"Pod created successfully! ID: {pod['id']}")
+        print("Waiting for connection details and model response...")
+        
+        details = None
+        url = f"https://{pod['id']}-8000.proxy.runpod.net/"
+        
+        # Wait for pod to be ready and model to respond
+        max_wait_minutes = 10
+        start_time = time.time()
+        model_ready = False
+        
+        while (time.time() - start_time) < (max_wait_minutes * 60):
             details = manager.get_connection_details(pod['id'])
-            print(f"Details: {details}")
+            if details and details.get('status') == 'RUNNING':
+                try:
+                    # Try to ping the vLLM health or models endpoint
+                    response = requests.get(f"{url}v1/models", timeout=5)
+                    if response.status_code == 200:
+                        model_ready = True
+                        break
+                except:
+                    pass
+            
+            print(f"  ... still waiting (elapsed: {int(time.time() - start_time)}s)", end='\r')
+            time.sleep(10)
+            
+        print("\n")
+        if details:
+            print(f"Connection Details:")
+            print(f"  - ID:     {details['id']}")
+            print(f"  - Status: {details['status']}")
+            print(f"  - URL:    {url}")
+            if model_ready:
+                print("  - Model:  READY (responding to ping)")
+            else:
+                print("  - Model:  NOT READY (timed out waiting for response)")
         else:
-            print("Failed to create pod.")
+            print("Could not fetch connection details.")
     else:
-        print("\nNo template ID provided. Skipping deployment.")
+        print("Failed to create pod.")
 
 if __name__ == "__main__":
     main()
