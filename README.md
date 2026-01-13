@@ -53,6 +53,16 @@ runpod-serve \
 runpod-serve --model meta-llama/Llama-3.1-70B-Instruct --users 1 --dry-run
 ```
 
+**Filter for specific hardware:**
+```bash
+runpod-serve --model Qwen/Qwen3-Omni-30B-A3B-Instruct --users 5 --gpu-filter "A40"
+```
+
+**Pass extra vLLM arguments:**
+```bash
+runpod-serve --model Qwen/Qwen3-Omni-30B-A3B-Instruct --users 1 --vllm-args "--enable-auto-tool-choice --tool-call-parser qwen"
+```
+
 ### Python API
 ```python
 from runpod_model_serving import get_model_params, RunpodManager

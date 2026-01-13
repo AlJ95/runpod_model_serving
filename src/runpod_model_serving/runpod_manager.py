@@ -1,5 +1,6 @@
 import runpod
 import os
+import re
 from .utils.gpu_data import GPU_CARDS
 from .calculator import calculate_performance
 
@@ -9,13 +10,18 @@ class RunpodManager:
         if self.api_key:
             runpod.api_key = self.api_key
             
-    def find_best_gpu(self, model_params, quant='int4', kv_quant='fp8', max_length=8192, user_count=1):
+    def find_best_gpu(self, model_params, quant='int4', kv_quant='fp8', max_length=8192, user_count=1, gpu_filter=None):
         best_setup = None
         min_total_price = float('inf')
         
         # Try different GPU counts (1 to 8)
         for gpu_count in range(1, 9):
             for gpu in GPU_CARDS:
+                # Apply GPU filter if provided
+                if gpu_filter:
+                    if not re.search(gpu_filter, gpu['name'], re.IGNORECASE):
+                        continue
+
                 res = calculate_performance(
                     gpu, model_params, quant, kv_quant, max_length, user_count, parallel_gpus=gpu_count
                 )
@@ -45,32 +51,23 @@ class RunpodManager:
                             
         return best_setup
 
-    def deploy_pod(self, gpu_name, model_id, template_id=None, gpu_count=1, pod_name="llm-serving-pod", max_model_len=8192, gpu_util=0.9, model_size_gb=20):
+    def deploy_pod(self, gpu_name, model_id, template_id=None, gpu_count=1, pod_name="llm-serving-pod", max_model_len=8192, gpu_util=0.9, model_size_gb=20, extra_vllm_args=None):
         """
         Deploys a pod using an existing template or the official vLLM image.
         """
         # Ensure pod_name is lowercase and not None
         pod_name = (pod_name or "llm-serving-pod").lower()
 
-        # Mapping common names to Runpod IDs (simplified)
-        gpu_id_map = {
-            "NVIDIA RTX 3090": "NVIDIA GeForce RTX 3090",
-            "NVIDIA RTX 4090": "NVIDIA GeForce RTX 4090",
-            "NVIDIA A100 80G": "NVIDIA A100 80GB PCIe",
-            "NVIDIA H100 80G": "NVIDIA H100 80GB PCIe",
-            "NVIDIA A40": "NVIDIA A40",
-        }
-        
-        # Clean up name for matching
-        clean_name = gpu_name.replace("NVIDIA ", "").split(" ")[0]
+        # Find the GPU in GPU_CARDS to get the correct runpod_id
         target_gpu_id = None
-        for k, v in gpu_id_map.items():
-            if clean_name in k:
-                target_gpu_id = v
+        for card in GPU_CARDS:
+            if card['name'] == gpu_name:
+                target_gpu_id = card.get('runpod_id')
                 break
         
         if not target_gpu_id:
-            target_gpu_id = gpu_name # Fallback
+            print(f"Warning: GPU '{gpu_name}' not found in GPU_CARDS. Falling back to name.")
+            target_gpu_id = gpu_name
             
         try:
             if template_id:
@@ -81,15 +78,20 @@ class RunpodManager:
                     gpu_count=gpu_count
                 )
             else:
-                # Calculate disk size: model size + 20GB buffer for OS/vLLM
-                disk_size = int(model_size_gb + 20)
+                print(f"Deploying pod with {gpu_count}x {target_gpu_id} using vLLM image...")
+                # Calculate disk size: model size + 30GB buffer for OS/vLLM
+                disk_size = int(model_size_gb * 1.25 + 30)
                 # Use official vLLM image
+                vllm_cmd = f"--model {model_id} --gpu-memory-utilization {gpu_util} --max-model-len {max_model_len} -tp {gpu_count}"
+                if extra_vllm_args:
+                    vllm_cmd += f" {extra_vllm_args}"
+                
                 pod = runpod.create_pod(
                     name=pod_name,
                     image_name="vllm/vllm-openai:latest",
                     gpu_type_id=target_gpu_id,
                     gpu_count=gpu_count,
-                    docker_args=f"--model {model_id} --gpu-memory-utilization {gpu_util} --max-model-len {max_model_len}",
+                    docker_args=vllm_cmd,
                     ports="8000/http",
                     container_disk_in_gb=disk_size
                 )

@@ -8,7 +8,44 @@ from .hf_loader import get_model_params
 from .runpod_manager import RunpodManager
 from .calculator import calculate_performance
 
+# Global state for cleanup
+active_pod_id = None
+terminate_on_exit = False
+manager = None
+
+def cleanup():
+    """
+    Cleanup function registered with atexit.
+    Ensures the pod is terminated if requested.
+    """
+    global active_pod_id, terminate_on_exit, manager
+    if terminate_on_exit and active_pod_id and manager:
+        print(f"\n[CLEANUP] Terminating pod {active_pod_id}...")
+        success = manager.terminate_pod(active_pod_id)
+        if success:
+            print("[CLEANUP] Pod successfully terminated.")
+        else:
+            print("[CLEANUP] Failed to terminate pod. Please check your Runpod dashboard.")
+
+def signal_handler(sig, frame):
+    """
+    Signal handler for SIGINT, SIGTERM, and SIGHUP.
+    Triggers sys.exit(0) to invoke atexit handlers.
+    """
+    sig_name = signal.Signals(sig).name
+    print(f"\n[SIGNAL] Received {sig_name}. Initiating shutdown...")
+    sys.exit(0)
+
+# Register cleanup and signals at module level
+atexit.register(cleanup)
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+if hasattr(signal, 'SIGHUP'):
+    signal.signal(signal.SIGHUP, signal_handler)
+
 def main():
+    global active_pod_id, terminate_on_exit, manager
+    
     parser = argparse.ArgumentParser(description="Runpod LLM Serving Tool")
     parser.add_argument("--model", type=str, required=True, help="HuggingFace Model ID")
     parser.add_argument("--template", type=str, help="Runpod Template ID")
@@ -21,27 +58,14 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Calculate only, do not deploy")
     parser.add_argument("--pod-name", type=str, help="Custom name for the pod")
     parser.add_argument("--terminate-on-exit", action="store_true", help="Terminate the pod when the script exits")
+    parser.add_argument("--gpu-filter", type=str, help="Regex filter for GPU names (e.g. 'A40', '3090')")
+    parser.add_argument("--vllm-args", type=str, help="Extra arguments for vLLM (e.g. '--enable-auto-tool-choice')")
     
     args = parser.parse_args()
     
-    # Cleanup logic
-    active_pod_id = None
+    # Update global state
+    terminate_on_exit = args.terminate_on_exit
     manager = RunpodManager(api_key=args.api_key)
-
-    def cleanup():
-        if args.terminate_on_exit and active_pod_id:
-            print(f"\nTerminating pod {active_pod_id}...")
-            manager.terminate_pod(active_pod_id)
-            print("Pod terminated.")
-
-    def signal_handler(sig, frame):
-        sys.exit(0)
-
-    atexit.register(cleanup)
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    if hasattr(signal, 'SIGHUP'):
-        signal.signal(signal.SIGHUP, signal_handler)
 
     print(f"Fetching model info for {args.model}...")
     params = get_model_params(args.model)
@@ -57,7 +81,8 @@ def main():
         quant=args.quant, 
         kv_quant=args.kv_quant, 
         max_length=args.max_length, 
-        user_count=args.users
+        user_count=args.users,
+        gpu_filter=args.gpu_filter
     )
     
     if not best_setup:
@@ -99,7 +124,8 @@ def main():
         pod_name=args.pod_name,
         max_model_len=args.max_length,
         gpu_util=args.util,
-        model_size_gb=res['model_vram']
+        model_size_gb=res['model_vram'],
+        extra_vllm_args=args.vllm_args
     )
     
     if pod:
@@ -142,6 +168,18 @@ def main():
                 print("  - Model:  NOT READY (timed out waiting for response)")
         else:
             print("Could not fetch connection details.")
+            
+        # Keep the script running if terminate-on-exit is set, so the user can actually use the pod
+        # and then terminate it by stopping the script.
+        if terminate_on_exit:
+            print("\n[INFO] --terminate-on-exit is active. Keep this terminal open to keep the pod running.")
+            print("[INFO] Press Ctrl+C to stop the script and terminate the pod.")
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                # This will be caught by the signal handler anyway, but just in case
+                sys.exit(0)
     else:
         print("Failed to create pod.")
 
