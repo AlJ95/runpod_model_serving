@@ -118,3 +118,11 @@ class RunpodManager:
         except Exception as e:
             print(f"Error getting pod details: {e}")
             return None
+
+    def terminate_pod(self, pod_id):
+        try:
+            runpod.terminate_pod(pod_id)
+            return True
+        except Exception as e:
+            print(f"Error terminating pod: {e}")
+            return False

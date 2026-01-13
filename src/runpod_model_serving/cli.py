@@ -2,6 +2,8 @@ import sys
 import argparse
 import time
 import requests
+import signal
+import atexit
 from .hf_loader import get_model_params
 from .runpod_manager import RunpodManager
 from .calculator import calculate_performance
@@ -18,9 +20,27 @@ def main():
     parser.add_argument("--util", type=float, default=0.95, help="GPU Memory Utilization (vLLM default 0.9)")
     parser.add_argument("--dry-run", action="store_true", help="Calculate only, do not deploy")
     parser.add_argument("--pod-name", type=str, help="Custom name for the pod")
+    parser.add_argument("--terminate-on-exit", action="store_true", help="Terminate the pod when the script exits")
     
     args = parser.parse_args()
     
+    # Cleanup logic
+    active_pod_id = None
+    manager = RunpodManager(api_key=args.api_key)
+
+    def cleanup():
+        if args.terminate_on_exit and active_pod_id:
+            print(f"\nTerminating pod {active_pod_id}...")
+            manager.terminate_pod(active_pod_id)
+            print("Pod terminated.")
+
+    def signal_handler(sig, frame):
+        sys.exit(0)
+
+    atexit.register(cleanup)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     print(f"Fetching model info for {args.model}...")
     params = get_model_params(args.model)
     if not params:
@@ -29,7 +49,6 @@ def main():
         
     print(f"Model Params: {params['total_params_b']:.2f}B parameters, {params['layers']} layers")
     
-    manager = RunpodManager(api_key=args.api_key)
     # Find best GPU based on requested user count (Strict Concurrency)
     best_setup = manager.find_best_gpu(
         params, 
@@ -82,6 +101,7 @@ def main():
     )
     
     if pod:
+        active_pod_id = pod['id']
         print(f"Pod created successfully! ID: {pod['id']}")
         print("Waiting for connection details and model response...")
         
